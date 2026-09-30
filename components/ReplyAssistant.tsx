@@ -6,17 +6,41 @@ import { CopyIcon, WhatsAppIcon } from './Icons';
 
 interface Props {
   brand: BrandContext;
-  onSave: (item: any) => void;
+  onSave: (item: any) => Promise<string> | void;
+  onUpdate?: (id: string, updates: Partial<any>) => Promise<void> | void;
 }
 
-const ReplyAssistant: React.FC<Props> = ({ brand, onSave }) => {
-  const [msg, setMsg] = useState('');
-  const [context, setContext] = useState('');
-  const [variants, setVariants] = useState<ReplyVariant[]>([]);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
-  const [editedText, setEditedText] = useState('');
+const DRAFT_STORAGE_KEY = 'mccia_draft_reply';
+
+const ReplyAssistant: React.FC<Props> = ({ brand, onSave, onUpdate }) => {
+  const getStoredDraft = () => {
+    try {
+      const saved = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  };
+
+  const initialDraft = getStoredDraft();
+
+  const [msg, setMsg] = useState(initialDraft?.msg || '');
+  const [context, setContext] = useState(initialDraft?.context || '');
+  const [variants, setVariants] = useState<ReplyVariant[]>(initialDraft?.variants || []);
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(initialDraft?.selectedIdx ?? (initialDraft?.variants?.length ? 0 : null));
+  const [editedText, setEditedText] = useState(initialDraft?.editedText || '');
   const [loading, setLoading] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState(initialDraft?.saved || false);
+  const [historyId, setHistoryId] = useState<string | null>(initialDraft?.historyId || null);
+
+  // Sync draft to sessionStorage
+  React.useEffect(() => {
+    if (msg || variants.length > 0) {
+      sessionStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({ msg, context, variants, selectedIdx, editedText, saved, historyId })
+      );
+    }
+  }, [msg, context, variants, selectedIdx, editedText, saved, historyId]);
 
   const handleGenerate = async () => {
     if (!msg) return;
@@ -30,6 +54,16 @@ const ReplyAssistant: React.FC<Props> = ({ brand, onSave }) => {
       if (output.length > 0) {
         setSelectedIdx(0);
         setEditedText(output[0].text);
+        // Auto-save reply draft to history
+        const newId = await onSave({
+          type: 'reply',
+          content: output[0].text,
+          status: 'draft',
+          meta: { customerQuery: msg, context, variants: output }
+        });
+        if (typeof newId === 'string') {
+          setHistoryId(newId);
+        }
       }
     } catch (e) {
       alert("Error generating replies.");
@@ -46,7 +80,11 @@ const ReplyAssistant: React.FC<Props> = ({ brand, onSave }) => {
 
   const handleUseReply = () => {
     if (!editedText) return;
-    onSave({ type: 'reply', content: editedText, status: 'published' });
+    if (historyId && onUpdate) {
+      onUpdate(historyId, { content: editedText, status: 'published' });
+    } else {
+      onSave({ type: 'reply', content: editedText, status: 'published', meta: { customerQuery: msg, context } });
+    }
     setSaved(true);
   };
 

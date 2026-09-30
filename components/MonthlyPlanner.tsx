@@ -6,10 +6,19 @@ import { CalendarIcon } from './Icons';
 
 interface Props {
   brand: BrandContext;
+  onSave?: (item: any) => Promise<string> | void;
 }
 
-const MonthlyPlanner: React.FC<Props> = ({ brand }) => {
-  const [plan, setPlan] = useState<MonthlyPlanItem[]>([]);
+const STORAGE_KEY = 'mccia_monthly_plan';
+
+const MonthlyPlanner: React.FC<Props> = ({ brand, onSave }) => {
+  const [plan, setPlan] = useState<MonthlyPlanItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return [];
+  });
   const [loading, setLoading] = useState(false);
 
   const handleGenerate = async () => {
@@ -17,11 +26,27 @@ const MonthlyPlanner: React.FC<Props> = ({ brand }) => {
     try {
       const output = await generateMonthlyPlan(brand);
       setPlan(output);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(output));
+
+      if (onSave && output.length > 0) {
+        const planSummary = `30-Day Content Plan:\n` + output.slice(0, 10).map(p => `• [${p.date}] (${p.type}): ${p.topic}`).join('\n') + (output.length > 10 ? `\n...and ${output.length - 10} more days.` : '');
+        onSave({
+          type: 'post',
+          content: planSummary,
+          status: 'draft',
+          meta: { kind: 'monthly_plan', plan: output }
+        });
+      }
     } catch (e) {
       alert("Error generating plan.");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClear = () => {
+    setPlan([]);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   return (
@@ -64,7 +89,7 @@ const MonthlyPlanner: React.FC<Props> = ({ brand }) => {
             </div>
           ))}
           <button
-            onClick={() => setPlan([])}
+            onClick={handleClear}
             className="w-full text-center py-4 text-xs font-black text-subtle uppercase tracking-widest hover:text-primary transition-colors"
           >
             Clear and generate again

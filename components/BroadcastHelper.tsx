@@ -7,7 +7,8 @@ import Stepper from './Stepper';
 
 interface Props {
   brand: BrandContext;
-  onSave: (item: any) => void;
+  onSave: (item: any) => Promise<string> | void;
+  onUpdate?: (id: string, updates: Partial<any>) => Promise<void> | void;
   contacts: Contact[];
   onAddContact: (contact: Omit<Contact, 'id'>) => Promise<Contact>;
   onDeleteContact: (id: string) => void;
@@ -17,27 +18,78 @@ type AudienceMode = 'all' | 'industry' | 'location' | 'selected' | 'custom';
 const STEPS = ['Compose', 'Audience', 'Review & Send'];
 const CTAS = ['Shop Now', 'Contact Us', 'Learn More', 'Register Now'];
 
-const BroadcastHelper: React.FC<Props> = ({ brand, onSave, contacts, onAddContact, onDeleteContact }) => {
-  const [step, setStep] = useState(0);
+const DRAFT_STORAGE_KEY = 'mccia_draft_broadcast';
 
-  const [subject, setSubject] = useState('');
-  const [message, setMessage] = useState('');
-  const [link, setLink] = useState('');
-  const [cta, setCta] = useState(CTAS[0]);
+const BroadcastHelper: React.FC<Props> = ({ brand, onSave, onUpdate, contacts, onAddContact, onDeleteContact }) => {
+  const getStoredDraft = () => {
+    try {
+      const saved = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  };
+
+  const initialDraft = getStoredDraft();
+
+  const [step, setStep] = useState<number>(initialDraft?.step || 0);
+
+  const [subject, setSubject] = useState(initialDraft?.subject || '');
+  const [message, setMessage] = useState(initialDraft?.message || '');
+  const [link, setLink] = useState(initialDraft?.link || '');
+  const [cta, setCta] = useState(initialDraft?.cta || CTAS[0]);
   const [drafting, setDrafting] = useState(false);
 
-  const [audienceMode, setAudienceMode] = useState<AudienceMode>('all');
-  const [industry, setIndustry] = useState('');
-  const [location, setLocation] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [customList, setCustomList] = useState('');
-  const [sendMode, setSendMode] = useState<'now' | 'later'>('now');
-  const [sendDate, setSendDate] = useState('');
+  const [audienceMode, setAudienceMode] = useState<AudienceMode>(initialDraft?.audienceMode || 'all');
+  const [industry, setIndustry] = useState(initialDraft?.industry || '');
+  const [location, setLocation] = useState(initialDraft?.location || '');
+  const [selectedIds, setSelectedIds] = useState<string[]>(initialDraft?.selectedIds || []);
+  const [customList, setCustomList] = useState(initialDraft?.customList || '');
+  const [sendMode, setSendMode] = useState<'now' | 'later'>(initialDraft?.sendMode || 'now');
+  const [sendDate, setSendDate] = useState(initialDraft?.sendDate || '');
 
   const [newContact, setNewContact] = useState({ name: '', phone: '', industry: '', location: '' });
   const [showAddContact, setShowAddContact] = useState(false);
 
   const [savedStatus, setSavedStatus] = useState<ContentStatus | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(initialDraft?.historyId || null);
+
+  // Sync draft to sessionStorage
+  React.useEffect(() => {
+    if (message || subject || step > 0) {
+      sessionStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          step,
+          subject,
+          message,
+          link,
+          cta,
+          audienceMode,
+          industry,
+          location,
+          selectedIds,
+          customList,
+          sendMode,
+          sendDate,
+          historyId
+        })
+      );
+    }
+  }, [
+    step,
+    subject,
+    message,
+    link,
+    cta,
+    audienceMode,
+    industry,
+    location,
+    selectedIds,
+    customList,
+    sendMode,
+    sendDate,
+    historyId
+  ]);
 
   const industries = useMemo(() => Array.from(new Set(contacts.map(c => c.industry).filter(Boolean))) as string[], [contacts]);
   const locations = useMemo(() => Array.from(new Set(contacts.map(c => c.location).filter(Boolean))) as string[], [contacts]);
@@ -58,6 +110,16 @@ const BroadcastHelper: React.FC<Props> = ({ brand, onSave, contacts, onAddContac
     try {
       const output = await generateBroadcast(brand);
       setMessage(output);
+      const generatedFullMessage = `${subject ? subject + '\n\n' : ''}${output}${link ? `\n\n${link}` : ''}${cta ? `\n\n${cta}` : ''}`;
+      const newId = await onSave({
+        type: 'broadcast',
+        content: generatedFullMessage,
+        status: 'draft',
+        meta: { subject, cta, link }
+      });
+      if (typeof newId === 'string') {
+        setHistoryId(newId);
+      }
     } catch (e) {
       alert("Couldn't draft a message. Try writing one manually.");
     } finally {
@@ -91,17 +153,27 @@ const BroadcastHelper: React.FC<Props> = ({ brand, onSave, contacts, onAddContac
   const handleSend = () => {
     const scheduledAt = sendMode === 'later' && sendDate ? new Date(sendDate).getTime() : undefined;
     const status: ContentStatus = sendMode === 'later' ? 'scheduled' : 'published';
-    onSave({
-      type: 'broadcast',
-      content: fullMessage,
-      status,
-      scheduledAt,
-      meta: { subject, audienceMode, audienceLabel, audienceCount, cta, link }
-    });
+    if (historyId && onUpdate) {
+      onUpdate(historyId, {
+        content: fullMessage,
+        status,
+        scheduledAt,
+        meta: { subject, audienceMode, audienceLabel, audienceCount, cta, link }
+      });
+    } else {
+      onSave({
+        type: 'broadcast',
+        content: fullMessage,
+        status,
+        scheduledAt,
+        meta: { subject, audienceMode, audienceLabel, audienceCount, cta, link }
+      });
+    }
     setSavedStatus(status);
   };
 
   const startOver = () => {
+    sessionStorage.removeItem(DRAFT_STORAGE_KEY);
     setStep(0);
     setSubject('');
     setMessage('');
@@ -109,6 +181,7 @@ const BroadcastHelper: React.FC<Props> = ({ brand, onSave, contacts, onAddContac
     setSelectedIds([]);
     setCustomList('');
     setSavedStatus(null);
+    setHistoryId(null);
   };
 
   return (

@@ -10,7 +10,8 @@ import { ContentStatus } from '../types';
 interface Props {
   brand: BrandContext;
   history: HistoryItem[];
-  onSave: (item: any) => void;
+  onSave: (item: any) => Promise<string> | void;
+  onUpdate?: (id: string, updates: Partial<HistoryItem>) => Promise<void> | void;
 }
 
 const OBJECTIVES = ['Event Promotion', 'Product/Service', 'Educational', 'Announcement', 'Engagement'];
@@ -28,19 +29,42 @@ const Chip: React.FC<{ label: string, active: boolean, onClick: () => void }> = 
   </button>
 );
 
-const PostGenerator: React.FC<Props> = ({ brand, history, onSave }) => {
-  const [step, setStep] = useState(0);
-  const [objective, setObjective] = useState(OBJECTIVES[0]);
-  const [tone, setTone] = useState(TONES[0]);
-  const [platform, setPlatform] = useState(PLATFORMS[0]);
-  const [brief, setBrief] = useState('');
+const DRAFT_STORAGE_KEY = 'mccia_draft_post';
 
-  const [post, setPost] = useState<GeneratedPost | null>(null);
-  const [imagePrompt, setImagePrompt] = useState<ImagePrompt | null>(null);
+const PostGenerator: React.FC<Props> = ({ brand, history, onSave, onUpdate }) => {
+  const getStoredDraft = () => {
+    try {
+      const saved = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  };
+
+  const initialDraft = getStoredDraft();
+
+  const [step, setStep] = useState<number>(initialDraft?.step || 0);
+  const [objective, setObjective] = useState(initialDraft?.objective || OBJECTIVES[0]);
+  const [tone, setTone] = useState(initialDraft?.tone || TONES[0]);
+  const [platform, setPlatform] = useState(initialDraft?.platform || PLATFORMS[0]);
+  const [brief, setBrief] = useState(initialDraft?.brief || '');
+
+  const [post, setPost] = useState<GeneratedPost | null>(initialDraft?.post || null);
+  const [imagePrompt, setImagePrompt] = useState<ImagePrompt | null>(initialDraft?.imagePrompt || null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'caption' | 'visual'>('caption');
+  const [historyId, setHistoryId] = useState<string | null>(initialDraft?.historyId || null);
 
   const [savedStatus, setSavedStatus] = useState<ContentStatus | null>(null);
+
+  // Sync draft to sessionStorage
+  React.useEffect(() => {
+    if (post || brief || step > 0) {
+      sessionStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({ step, objective, tone, platform, brief, post, imagePrompt, historyId })
+      );
+    }
+  }, [step, objective, tone, platform, brief, post, imagePrompt, historyId]);
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -48,8 +72,29 @@ const PostGenerator: React.FC<Props> = ({ brand, history, onSave }) => {
       const output = await generateTodayPost(brand, history, objective, platform, brief || undefined, tone);
       setPost(output);
       setStep(1);
+
+      const generatedFullText = `${output.headline ? output.headline + '\n\n' : ''}${output.caption}\n\n${output.hashtags.map((h: string) => h.startsWith('#') ? h : `#${h}`).join(' ')}\n\n${output.cta}`;
+
+      // Auto-save to history as draft immediately
+      const newHistoryId = await onSave({
+        type: 'post',
+        content: generatedFullText,
+        status: 'draft',
+        meta: { objective, tone, platform, headline: output.headline, hashtags: output.hashtags, cta: output.cta }
+      });
+      if (typeof newHistoryId === 'string') {
+        setHistoryId(newHistoryId);
+      }
+
       const visual = await generateImagePromptForPost(brand, output.caption);
       setImagePrompt(visual);
+
+      // Update history with visual prompt if we have the id
+      if (newHistoryId && onUpdate) {
+        onUpdate(newHistoryId, {
+          meta: { objective, tone, platform, headline: output.headline, hashtags: output.hashtags, cta: output.cta, imagePrompt: visual }
+        });
+      }
     } catch (e) {
       alert("Error generating post. Please try again.");
     } finally {
@@ -73,22 +118,33 @@ const PostGenerator: React.FC<Props> = ({ brand, history, onSave }) => {
 
   const handleConfirmSchedule = (status: ContentStatus, scheduledAt?: number) => {
     if (!post) return;
-    onSave({
-      type: 'post',
-      content: fullText,
-      status,
-      scheduledAt,
-      meta: { objective, tone, platform, headline: post.headline, hashtags: post.hashtags, cta: post.cta, imagePrompt }
-    });
+    if (historyId && onUpdate) {
+      onUpdate(historyId, {
+        content: fullText,
+        status,
+        scheduledAt,
+        meta: { objective, tone, platform, headline: post.headline, hashtags: post.hashtags, cta: post.cta, imagePrompt }
+      });
+    } else {
+      onSave({
+        type: 'post',
+        content: fullText,
+        status,
+        scheduledAt,
+        meta: { objective, tone, platform, headline: post.headline, hashtags: post.hashtags, cta: post.cta, imagePrompt }
+      });
+    }
     setSavedStatus(status);
   };
 
   const startOver = () => {
+    sessionStorage.removeItem(DRAFT_STORAGE_KEY);
     setStep(0);
     setPost(null);
     setImagePrompt(null);
     setSavedStatus(null);
     setBrief('');
+    setHistoryId(null);
   };
 
   return (

@@ -8,7 +8,8 @@ import ScheduleStep from './ScheduleStep';
 
 interface Props {
   brand: BrandContext;
-  onSave: (item: any) => void;
+  onSave: (item: any) => Promise<string> | void;
+  onUpdate?: (id: string, updates: Partial<any>) => Promise<void> | void;
 }
 
 const STEPS = ['Create Offer', 'Design', 'Preview'];
@@ -24,25 +25,76 @@ const TEMPLATES = [
 
 const BRAND_COLORS = ['#2563eb', '#7c3aed', '#059669', '#ea580c', '#db2777'];
 
-const OfferGenerator: React.FC<Props> = ({ brand, onSave }) => {
-  const [step, setStep] = useState(0);
+const DRAFT_STORAGE_KEY = 'mccia_draft_offer';
 
-  const [productName, setProductName] = useState('');
-  const [offerTitle, setOfferTitle] = useState('');
-  const [discount, setDiscount] = useState('');
-  const [description, setDescription] = useState('');
-  const [validUntil, setValidUntil] = useState('');
-  const [targetAudience, setTargetAudience] = useState('');
-  const [cta, setCta] = useState(CTAS[0]);
+const OfferGenerator: React.FC<Props> = ({ brand, onSave, onUpdate }) => {
+  const getStoredDraft = () => {
+    try {
+      const saved = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  };
 
-  const [template, setTemplate] = useState(TEMPLATES[0].id);
-  const [accentColor, setAccentColor] = useState(BRAND_COLORS[0]);
+  const initialDraft = getStoredDraft();
+
+  const [step, setStep] = useState<number>(initialDraft?.step || 0);
+
+  const [productName, setProductName] = useState(initialDraft?.productName || '');
+  const [offerTitle, setOfferTitle] = useState(initialDraft?.offerTitle || '');
+  const [discount, setDiscount] = useState(initialDraft?.discount || '');
+  const [description, setDescription] = useState(initialDraft?.description || '');
+  const [validUntil, setValidUntil] = useState(initialDraft?.validUntil || '');
+  const [targetAudience, setTargetAudience] = useState(initialDraft?.targetAudience || '');
+  const [cta, setCta] = useState(initialDraft?.cta || CTAS[0]);
+
+  const [template, setTemplate] = useState(initialDraft?.template || TEMPLATES[0].id);
+  const [accentColor, setAccentColor] = useState(initialDraft?.accentColor || BRAND_COLORS[0]);
   const [visualLoading, setVisualLoading] = useState(false);
-  const [visualImage, setVisualImage] = useState<string | null>(null);
+  const [visualImage, setVisualImage] = useState<string | null>(initialDraft?.visualImage || null);
 
-  const [offer, setOffer] = useState<GeneratedOffer | null>(null);
+  const [offer, setOffer] = useState<GeneratedOffer | null>(initialDraft?.offer || null);
   const [loading, setLoading] = useState(false);
   const [savedStatus, setSavedStatus] = useState<ContentStatus | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(initialDraft?.historyId || null);
+
+  // Sync draft to sessionStorage
+  React.useEffect(() => {
+    if (productName || offer || step > 0) {
+      sessionStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          step,
+          productName,
+          offerTitle,
+          discount,
+          description,
+          validUntil,
+          targetAudience,
+          cta,
+          template,
+          accentColor,
+          visualImage,
+          offer,
+          historyId
+        })
+      );
+    }
+  }, [
+    step,
+    productName,
+    offerTitle,
+    discount,
+    description,
+    validUntil,
+    targetAudience,
+    cta,
+    template,
+    accentColor,
+    visualImage,
+    offer,
+    historyId
+  ]);
 
   const activeTemplate = TEMPLATES.find(t => t.id === template)!;
 
@@ -63,12 +115,26 @@ const OfferGenerator: React.FC<Props> = ({ brand, onSave }) => {
     }
   };
 
+  const autoSaveOfferDraft = async (genOffer: GeneratedOffer) => {
+    const text = `${genOffer.caption}\n\n${genOffer.hashtags.map((h: string) => h.startsWith('#') ? h : `#${h}`).join(' ')}`;
+    const newId = await onSave({
+      type: 'offer',
+      content: text,
+      status: 'draft',
+      meta: { productName, offerTitle, discount, validUntil, targetAudience, cta, template, accentColor, visualImage }
+    });
+    if (typeof newId === 'string') {
+      setHistoryId(newId);
+    }
+  };
+
   const goToPreview = async () => {
     setStep(2);
     setLoading(true);
     try {
       const output = await generateOffer(brand, { productName, offerTitle, discount, description, validUntil, targetAudience, cta });
       setOffer(output);
+      await autoSaveOfferDraft(output);
     } catch (e) {
       alert("Error generating offer.");
       setStep(1);
@@ -82,6 +148,7 @@ const OfferGenerator: React.FC<Props> = ({ brand, onSave }) => {
     try {
       const output = await generateOffer(brand, { productName, offerTitle, discount, description, validUntil, targetAudience, cta });
       setOffer(output);
+      await autoSaveOfferDraft(output);
     } catch (e) {
       alert("Error regenerating offer.");
     } finally {
@@ -92,17 +159,27 @@ const OfferGenerator: React.FC<Props> = ({ brand, onSave }) => {
   const fullText = offer ? `${offer.caption}\n\n${offer.hashtags.map(h => h.startsWith('#') ? h : `#${h}`).join(' ')}` : '';
 
   const handleConfirm = (status: ContentStatus, scheduledAt?: number) => {
-    onSave({
-      type: 'offer',
-      content: fullText,
-      status,
-      scheduledAt,
-      meta: { productName, offerTitle, discount, validUntil, targetAudience, cta, template, accentColor }
-    });
+    if (historyId && onUpdate) {
+      onUpdate(historyId, {
+        content: fullText,
+        status,
+        scheduledAt,
+        meta: { productName, offerTitle, discount, validUntil, targetAudience, cta, template, accentColor, visualImage }
+      });
+    } else {
+      onSave({
+        type: 'offer',
+        content: fullText,
+        status,
+        scheduledAt,
+        meta: { productName, offerTitle, discount, validUntil, targetAudience, cta, template, accentColor, visualImage }
+      });
+    }
     setSavedStatus(status);
   };
 
   const startOver = () => {
+    sessionStorage.removeItem(DRAFT_STORAGE_KEY);
     setStep(0);
     setOffer(null);
     setVisualImage(null);
@@ -113,6 +190,7 @@ const OfferGenerator: React.FC<Props> = ({ brand, onSave }) => {
     setDescription('');
     setValidUntil('');
     setTargetAudience('');
+    setHistoryId(null);
   };
 
   return (

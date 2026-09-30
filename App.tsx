@@ -71,7 +71,7 @@ const App: React.FC = () => {
     window.scrollTo(0, 0);
   };
 
-  const addToHistory = async (item: Omit<HistoryItem, 'id' | 'timestamp'>) => {
+  const addToHistory = async (item: Omit<HistoryItem, 'id' | 'timestamp'>): Promise<string> => {
     setIsSyncing(true);
     const newId = await addHistoryToCloud(item);
     const newItem: HistoryItem = {
@@ -79,8 +79,9 @@ const App: React.FC = () => {
       id: newId,
       timestamp: Date.now()
     };
-    setHistory(prev => [newItem, ...prev].slice(0, 50));
+    setHistory(prev => [newItem, ...prev.filter(i => i.id !== newId)].slice(0, 50));
     setIsSyncing(false);
+    return newId;
   };
 
   const handleDeleteHistory = async (id: string) => {
@@ -154,20 +155,21 @@ const App: React.FC = () => {
           onUpdate={handleUpdateHistory}
         />
       );
-      case 'post': return <PostGenerator brand={brand} history={history} onSave={addToHistory} />;
-      case 'offer': return <OfferGenerator brand={brand} onSave={addToHistory} />;
-      case 'reply': return <ReplyAssistant brand={brand} onSave={addToHistory} />;
+      case 'post': return <PostGenerator brand={brand} history={history} onSave={addToHistory} onUpdate={handleUpdateHistory} />;
+      case 'offer': return <OfferGenerator brand={brand} onSave={addToHistory} onUpdate={handleUpdateHistory} />;
+      case 'reply': return <ReplyAssistant brand={brand} onSave={addToHistory} onUpdate={handleUpdateHistory} />;
       case 'broadcast': return (
         <BroadcastHelper
           brand={brand}
           onSave={addToHistory}
+          onUpdate={handleUpdateHistory}
           contacts={contacts}
           onAddContact={handleAddContact}
           onDeleteContact={handleDeleteContact}
         />
       );
       case 'prompt': return <ImagePromptGenerator brand={brand} onSave={addToHistory} history={history} onDelete={handleDeleteHistory} />;
-      case 'planner': return <MonthlyPlanner brand={brand} />;
+      case 'planner': return <MonthlyPlanner brand={brand} onSave={addToHistory} />;
       default: return <Dashboard setView={navigate} brand={brand} searchQuery={searchQuery} />;
     }
   };

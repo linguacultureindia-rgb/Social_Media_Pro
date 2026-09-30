@@ -32,16 +32,38 @@ const TEMPLATE_STARTERS: Record<string, string> = {
   Workshops: 'A graphic promoting an educational workshop or training session'
 };
 
+const DRAFT_STORAGE_KEY = 'mccia_draft_image';
+
 const ImagePromptGenerator: React.FC<Props> = ({ brand, history, onSave, onDelete }) => {
-  const [tab, setTab] = useState<Tab>('templates');
-  const [category, setCategory] = useState(CATEGORIES[0]);
-  const [prompt, setPrompt] = useState('');
-  const [style, setStyle] = useState(STYLES[0]);
-  const [format, setFormat] = useState(FORMATS[0]);
-  const [matchBrandColors, setMatchBrandColors] = useState(true);
+  const getStoredDraft = () => {
+    try {
+      const saved = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  };
+
+  const initialDraft = getStoredDraft();
+
+  const [tab, setTab] = useState<Tab>(initialDraft?.tab || 'templates');
+  const [category, setCategory] = useState(initialDraft?.category || CATEGORIES[0]);
+  const [prompt, setPrompt] = useState(initialDraft?.prompt || '');
+  const [style, setStyle] = useState(initialDraft?.style || STYLES[0]);
+  const [format, setFormat] = useState(initialDraft?.format || FORMATS[0]);
+  const [matchBrandColors, setMatchBrandColors] = useState(initialDraft?.matchBrandColors ?? true);
   const [loading, setLoading] = useState(false);
-  const [image, setImage] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [image, setImage] = useState<string | null>(initialDraft?.image || null);
+  const [saved, setSaved] = useState(initialDraft?.saved || false);
+
+  // Sync draft to sessionStorage
+  React.useEffect(() => {
+    if (prompt || image || tab !== 'templates') {
+      sessionStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({ tab, category, prompt, style, format, matchBrandColors, image, saved })
+      );
+    }
+  }, [tab, category, prompt, style, format, matchBrandColors, image, saved]);
 
   const designs = history.filter(h => h.type === 'prompt' && h.meta?.kind === 'image');
 
@@ -66,7 +88,11 @@ const ImagePromptGenerator: React.FC<Props> = ({ brand, history, onSave, onDelet
     try {
       const result = await generateImageAsset(brand, buildFullPrompt(), format.ratio);
       if (result) {
-        setImage(`data:${result.mimeType};base64,${result.imageBytes}`);
+        const fullImg = `data:${result.mimeType};base64,${result.imageBytes}`;
+        setImage(fullImg);
+        // Auto-save generated image to history
+        onSave({ type: 'prompt', content: fullImg, status: 'draft', meta: { kind: 'image', prompt, style, category } });
+        setSaved(true);
       } else {
         alert("Couldn't generate an image this time. Try adjusting your prompt.");
       }
